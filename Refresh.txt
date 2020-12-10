@@ -1,0 +1,97 @@
+#parameters
+<#
+    Change path, container name and folder name according to the process
+    $Path is the path variable to access the files for a process
+    $container name is the container of storage account
+    $foldername is folder where the files would be uploaded
+
+    This Script refreshes the Macros and creates csv files for the all the PMIO Tables.
+    These files are then uploaded to Blob container to be processed to Synapse Analytics Datawarehouse.
+
+#>
+write-host "Connect to Azure Account"
+Connect-AzAccount
+write-host "Connection Successfull"
+write-host "Refresh Tabs"
+
+$path = "D:\Users\ashish.sinha\OneDrive"
+$container = 'name'
+$folderName = 'folder'
+
+$root = $($path+'\'+$folderName+'\')
+$excelFiles = Get-ChildItem -Path $($root+'Template') -filter '*.xlsm'
+
+$excel = new-object -comobject excel.application
+$excel.Visible=$False
+$excel.DisplayAlerts = $False
+$excel.ScreenUpdating = $true
+
+$workbook = $excel.workbooks.open($excelFiles.FullName)
+$worksheet = $workbook.worksheets.item(1)
+
+
+$excel.Run("RefreshAll")
+
+Start-Sleep -Seconds 30
+
+$workbook.save()
+$workbook.close()
+$excel.quit()
+
+write-host "Excel is refreshed"
+
+spps -n Excel -Force
+
+$date = Get-Date -Format 'yyyy_MM_dd_hh_mm'
+
+Function ExportWSToCSV ($excelFileName, $csvLoc)
+{
+    $excelFile = $($root+'Template\') + $excelFileName + ".xlsm"
+    $E = New-Object -ComObject Excel.Application
+    $E.Visible = $false
+    $E.DisplayAlerts = $false
+    $wb = $E.Workbooks.Open($excelFile)
+    foreach ($ws in $wb.Worksheets)
+    {
+        $n = $excelFileName + "_" + $ws.Name
+        $ws.SaveAs($csvLoc + $n+ "_"+$date +".csv", 62)
+    }
+    $E.Quit()
+}
+
+ExportWSToCSV -excelFileName "Folder_data" -csvLoc $($root +'Inbound\')
+write-host "CSV Files generated"
+
+write-host "Call Upload blob script"
+#call upload script
+& $($root+"Scripts\UploadBlob.ps1") -path $path -folderName $folderName -container $container
+
+#archive the files
+Move-Item -Path $($path+'\'+$folderName+'\Inbound\*.csv') -Destination  $($path+'\'+$folderName+'\Archive')
+
+
+$workspaceName = "workspace name"
+$pipelineName = "pipelinename"
+
+#get the pipeline information
+$PPInfo = Get-AzSynapsePipeline -WorkspaceName $workspaceName -Name $pipelineName
+
+#run the pipeline
+write-host "Run the ADF Pipeline"
+$runID = (Invoke-AzSynapsePipeline -WorkspaceName $workspaceName -PipelineName $pipelineName).RunId
+
+
+#get pipeline run details
+#$PPRunDetails = Get-AzSynapsePipelineRun -WorkspaceName $workspaceName -PipelineRunId $runID | Where-Object {$_.IsLatest -eq $true} 
+
+while ($True)
+{
+    if(-not ([string]::IsNullOrEmpty((Get-AzSynapsePipelineRun -WorkspaceName $workspaceName -PipelineRunId $runID -ErrorAction SilentlyContinue).Status)))
+    {
+        write-host "The Pipeline run is finished."
+        break    
+    }
+    Write-Host "Pipeline is in runnning state"
+    Start-Sleep -Seconds 10
+
+}

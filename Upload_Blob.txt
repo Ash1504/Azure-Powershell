@@ -1,0 +1,25 @@
+Param([string]$path,[string]$folderName,[string]$container)
+
+#Function to upload blobs
+Function UploadBlob($path,$folderName,$container)
+{
+    #connect to AZ Account
+    #Connect-AzAccount
+
+    #Get subscription and Tenant ID
+    $subscriptionID = (Get-AzSubscription).SubscriptionId
+    $tenantID = (Get-AzSubscription).TenantId
+    
+    #Key to access the storage
+    $Key = Get-AzStorageAccountKey -ResourceGroupName "RG-Name" -AccountName "storage-name"
+    
+    #storage context to access blobs
+    $StorageContext = New-AzStorageContext -StorageAccountName bgnesynapse -StorageAccountKey $Key.Item(0).value;
+    
+    $inbound  = Get-ChildItem -Recurse $($path+'\'+$folderName) -Directory 'Inbound'
+    
+    Get-ChildItem -File -Path $inbound.FullName -Filter *.csv | ForEach-Object { Set-AzStorageBlobContent -File $_.FullName -Blob $_.FullName.Substring($_.FullName.IndexOf($folderName)) -Container $container -Context $StorageContext -Force}
+    write-host "Files uploaded to blob"
+}
+
+UploadBlob -path $path -folderName $folderName -container $container 
